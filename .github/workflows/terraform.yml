@@ -1,0 +1,233 @@
+name: Terraform validation
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+      - sbx
+  pull_request:
+    branches:
+      - main
+      - dev
+      - sbx
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+  TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform-plugin-cache
+
+jobs:
+  static-analysis:
+    name: Format, lint, and security
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.13.5
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive
+
+      - name: Set up TFLint
+        uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: v0.59.1
+
+      - name: Initialize TFLint plugins
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for attempt in 1 2 3; do
+            if tflint --init; then
+              exit 0
+            fi
+
+            if [[ "${attempt}" -eq 3 ]]; then
+              echo "TFLint plugin initialization failed after ${attempt} attempts." >&2
+              exit 1
+            fi
+
+            sleep $((attempt * 5))
+          done
+
+      - name: Run TFLint
+        run: tflint --recursive --format compact
+
+      - name: Scan Terraform configuration
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          hide-progress: true
+
+  module-tests:
+    name: Validate and test ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - application_load_balancer
+          - dynamodb_table
+          - ec2_instance
+          - ecr_repository
+          - ecs_service
+          - iam_role
+          - kms_key
+          - lambda_function
+          - rds
+          - s3_bucket
+          - security_group
+          - secrets_manager
+          - sns_topic
+          - sqs_queue
+          - vpc
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.13.5
+
+      - name: Create provider cache
+        run: mkdir -p "${TF_PLUGIN_CACHE_DIR}"
+
+      - name: Initialize module without backend
+        working-directory: modules/${{ matrix.module }}
+        run: terraform init -backend=false -input=false -no-color
+
+      - name: Validate module
+        working-directory: modules/${{ matrix.module }}
+        run: terraform validate -no-color
+
+      - name: Run mocked module tests
+        working-directory: modules/${{ matrix.module }}
+        run: terraform test -no-color
+
+  example-validation:
+    name: Validate foundation example
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.13.5
+
+      - name: Create provider cache
+        run: mkdir -p "${TF_PLUGIN_CACHE_DIR}"
+
+      - name: Initialize example without backend
+        working-directory: examples/foundation
+        run: terraform init -backend=false -input=false -no-color
+
+      - name: Validate example
+        working-directory: examples/foundation
+        run: terraform validate -no-color
+
+  publish-stage-repository:
+    name: Publish clean staging snapshot
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'CCOE-Azure/aws-template'
+    needs:
+      - static-analysis
+      - module-tests
+      - example-validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out validated source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Configure staging deploy key
+        env:
+          STAGE_REPOSITORY: ${{ vars.STAGE_REPOSITORY }}
+          STAGE_REPO_SSH_KEY: ${{ secrets.STAGE_REPO_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${STAGE_REPOSITORY}" ]]; then
+            echo "Missing required repository variable: STAGE_REPOSITORY" >&2
+            exit 1
+          fi
+
+          if [[ -z "${STAGE_REPO_SSH_KEY}" ]]; then
+            echo "Missing required secret: STAGE_REPO_SSH_KEY" >&2
+            exit 1
+          fi
+
+          install -d -m 700 "${HOME}/.ssh"
+          printf '%s\n' "${STAGE_REPO_SSH_KEY}" > "${HOME}/.ssh/stage_deploy_key"
+          chmod 600 "${HOME}/.ssh/stage_deploy_key"
+          ssh-keyscan -t ed25519 github.com >> "${HOME}/.ssh/known_hosts"
+
+          {
+            echo "Host github-stage"
+            echo "  HostName github.com"
+            echo "  User git"
+            echo "  IdentityFile ${HOME}/.ssh/stage_deploy_key"
+            echo "  IdentitiesOnly yes"
+          } >> "${HOME}/.ssh/config"
+          chmod 600 "${HOME}/.ssh/config"
+
+      - name: Publish clean snapshot
+        env:
+          STAGE_REPOSITORY: ${{ vars.STAGE_REPOSITORY }}
+          SOURCE_BRANCH: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "${workdir}"' EXIT
+
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.terraform' \
+            --exclude='.terraform.lock.hcl' \
+            "${GITHUB_WORKSPACE}/" "${workdir}/repo/"
+
+          cd "${workdir}/repo"
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${SOURCE_BRANCH}"
+          git add .
+          git commit -m "Stage snapshot from ${SOURCE_BRANCH}@${SOURCE_SHA}"
+          git remote add origin "git@github-stage:${STAGE_REPOSITORY}.git"
+          git push --force origin "${SOURCE_BRANCH}"
