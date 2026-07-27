@@ -1,0 +1,127 @@
+name: Terraform validation
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+      - sbx
+  pull_request:
+    branches:
+      - main
+      - dev
+      - sbx
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+  TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform-plugin-cache
+
+jobs:
+  static-analysis:
+    name: Format, lint, and security
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.5
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive
+
+      - name: Set up TFLint
+        uses: terraform-linters/setup-tflint@v5
+        with:
+          tflint_version: v0.59.1
+
+      - name: Initialize TFLint plugins
+        run: tflint --init
+
+      - name: Run TFLint
+        run: tflint --recursive --format compact
+
+      - name: Scan Terraform configuration
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          hide-progress: true
+
+  module-tests:
+    name: Validate and test ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - iam_role
+          - kms_key
+          - s3_bucket
+          - security_group
+          - vpc
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.5
+
+      - name: Create provider cache
+        run: mkdir -p "${TF_PLUGIN_CACHE_DIR}"
+
+      - name: Initialize module without backend
+        working-directory: modules/${{ matrix.module }}
+        run: terraform init -backend=false -input=false -no-color
+
+      - name: Validate module
+        working-directory: modules/${{ matrix.module }}
+        run: terraform validate -no-color
+
+      - name: Run mocked module tests
+        working-directory: modules/${{ matrix.module }}
+        run: terraform test -no-color
+
+  example-validation:
+    name: Validate foundation example
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.5
+
+      - name: Create provider cache
+        run: mkdir -p "${TF_PLUGIN_CACHE_DIR}"
+
+      - name: Initialize example without backend
+        working-directory: examples/foundation
+        run: terraform init -backend=false -input=false -no-color
+
+      - name: Validate example
+        working-directory: examples/foundation
+        run: terraform validate -no-color
