@@ -58,3 +58,17 @@ repository-scoped deploy key and is not an AWS deployment.
 
 The engineering standard is authoritative when an Azure-aligned convention
 conflicts with an AWS service constraint or a Terraform best practice.
+
+## Pipeline and usage summary
+
+GitHub Actions validates pull requests and `main` changes by formatting,
+linting, scanning, validating, and running mocked Terraform tests. It is a
+validation pipeline: it does not use AWS credentials, run a remote plan, or
+deploy infrastructure. After validation, the canonical workflow may publish a
+clean documentation snapshot to the configured staging repository.
+
+To use a module, copy or adapt an example under `examples/`, configure the AWS
+provider in the consuming root module, then run `terraform init`,
+`terraform validate`, and `terraform plan`. Apply only from the consuming
+environment after reviewing the plan; this repository is the reusable module
+source, not an automatic AWS deployment target.
