@@ -1,0 +1,556 @@
+name: Terraform
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+      - sbx
+  pull_request:
+    branches:
+      - main
+      - dev
+      - sbx
+    paths-ignore:
+      - "**/*.md"
+      - "**/*.MD"
+      - "**/*.pdf"
+      - "**/*.vsdx"
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Apply is reserved for downstream deployment repositories
+        required: false
+        default: false
+        type: boolean
+  repository_dispatch:
+    types:
+      - stage-snapshot
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+  TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform-plugin-cache
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  TERRAFORM_VERSION: 1.15.8
+
+jobs:
+  terraform-gate:
+    name: Terraform Workflow Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
+    steps:
+      - name: Evaluate IS_ORIGIN
+        id: gate
+        shell: bash
+        env:
+          IS_ORIGIN: ${{ vars.IS_ORIGIN }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${IS_ORIGIN,,}" == "true" ]]; then
+            echo "enabled=true" >> "${GITHUB_OUTPUT}"
+            echo "Terraform workflow is enabled for the origin repository."
+          else
+            echo "enabled=false" >> "${GITHUB_OUTPUT}"
+            echo "Terraform workflow is disabled; downstream Terraform jobs will be skipped."
+          fi
+  static-validation:
+    needs: terraform-gate
+    if: needs['terraform-gate'].outputs.enabled == 'true'
+    name: Static IaC and Security Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Scan IaC and repository secrets
+        if: vars.ENABLE_IAC_SECRET_SCAN != 'false'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: misconfig,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "1"
+          timeout: 10m
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Terraform format check
+        run: terraform fmt -check -recursive
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: v0.59.1
+
+      - name: Initialize TFLint plugins
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: tflint --init
+
+      - name: Run TFLint
+        run: tflint --recursive --format compact
+
+  check-required-secrets-variables:
+    needs: terraform-gate
+    if: needs['terraform-gate'].outputs.enabled == 'true'
+    name: Check Required Secrets and Variables
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      has_stage_publish_inputs: ${{ steps.preflight.outputs.has_stage_publish_inputs }}
+      has_ado_dev_publish_inputs: ${{ steps.preflight.outputs.has_ado_dev_publish_inputs }}
+      is_stage_repository: ${{ steps.preflight.outputs.is_stage_repository }}
+    steps:
+      - name: Evaluate optional publication inputs
+        id: preflight
+        shell: bash
+        env:
+          STAGE_REPOSITORY: ${{ vars.STAGE_REPOSITORY || 'andyxuan2010/aws-template' }}
+          STAGE_REPO_TOKEN: ${{ secrets.STAGE_REPO_TOKEN }}
+          ADO_DEV_REPOSITORY: ${{ vars.ADO_DEV_REPOSITORY }}
+          ADO_DEV_REPO_PAT: ${{ secrets.ADO_DEV_REPO_PAT }}
+          CURRENT_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          stage_repository="${STAGE_REPOSITORY#https://github.com/}"
+          stage_repository="${stage_repository%.git}"
+          stage_repository="${stage_repository#/}"
+          stage_repository="${stage_repository%/}"
+
+          if [[ -n "${stage_repository}" && "${CURRENT_REPOSITORY,,}" == "${stage_repository,,}" ]]; then
+            echo "is_stage_repository=true" >> "${GITHUB_OUTPUT}"
+            echo "Current repository matches STAGE_REPOSITORY; stage publication will be skipped to prevent a loop."
+          else
+            echo "is_stage_repository=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+          if [[ -n "${stage_repository}" && -n "${STAGE_REPO_TOKEN}" ]]; then
+            echo "has_stage_publish_inputs=true" >> "${GITHUB_OUTPUT}"
+            echo "GitHub stage repository publication inputs are present."
+          else
+            echo "has_stage_publish_inputs=false" >> "${GITHUB_OUTPUT}"
+            echo "GitHub stage repository publication inputs are incomplete; publication will be skipped."
+          fi
+
+          if [[ -n "${ADO_DEV_REPOSITORY}" && -n "${ADO_DEV_REPO_PAT}" ]]; then
+            echo "has_ado_dev_publish_inputs=true" >> "${GITHUB_OUTPUT}"
+            echo "Azure DevOps development publication inputs are present."
+          else
+            echo "has_ado_dev_publish_inputs=false" >> "${GITHUB_OUTPUT}"
+            echo "Azure DevOps development publication inputs are incomplete; publication will be skipped."
+          fi
+
+  detect-module-targets:
+    name: Detect Module Harness Targets
+    needs:
+      - terraform-gate
+      - check-required-secrets-variables
+    if: needs['terraform-gate'].outputs.enabled == 'true' && (needs.check-required-secrets-variables.outputs.is_stage_repository != 'true' || github.actor != 'github-actions[bot]')
+    runs-on: ubuntu-latest
+    outputs:
+      has_modules: ${{ steps.detect.outputs.has_modules }}
+      module_matrix: ${{ steps.detect.outputs.module_matrix }}
+      module_list: ${{ steps.detect.outputs.module_list }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed module targets
+        id: detect
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_HEAD_SHA: ${{ github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          all_modules_json="$(find modules -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort | jq -R . | jq -sc .)"
+          base_ref=""
+          head_ref="${PUSH_HEAD_SHA}"
+
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            base_ref="${PR_BASE_SHA}"
+            head_ref="${PR_HEAD_SHA}"
+          elif [[ "${EVENT_NAME}" == "push" ]]; then
+            base_ref="${PUSH_BEFORE_SHA}"
+          else
+            echo "Workflow dispatch has no stable diff base; selecting all modules."
+            echo "has_modules=true" >> "${GITHUB_OUTPUT}"
+            echo "module_matrix={\"module\":${all_modules_json}}" >> "${GITHUB_OUTPUT}"
+            echo "module_list=${all_modules_json}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if [[ -z "${base_ref}" || "${base_ref}" =~ ^0+$ ]]; then
+            changed_files=""
+            run_all=true
+          elif ! git cat-file -e "${base_ref}^{commit}" 2>/dev/null || ! git cat-file -e "${head_ref}^{commit}" 2>/dev/null; then
+            echo "Unable to resolve the push diff base or head (${base_ref}..${head_ref}); selecting all modules."
+            changed_files=""
+            run_all=true
+          else
+            if changed_files="$(git diff --name-only "${base_ref}" "${head_ref}")"; then
+              run_all=false
+            else
+              echo "Unable to calculate the push diff (${base_ref}..${head_ref}); selecting all modules."
+              changed_files=""
+              run_all=true
+            fi
+          fi
+
+          declare -A selected=()
+          while IFS= read -r changed_file; do
+            [[ -z "${changed_file}" ]] && continue
+            if [[ "${changed_file}" =~ ^modules/([^/]+)/ ]]; then
+              module_name="${BASH_REMATCH[1]}"
+              if [[ -d "modules/${module_name}" ]]; then
+                selected["${module_name}"]=1
+              fi
+            elif [[ "${changed_file}" =~ ^(examples/|scripts/|[^/]+\.tf$|\.tflint\.hcl$|\.terraform-docs\.yml$) ]]; then
+              run_all=true
+            fi
+          done <<< "${changed_files}"
+
+          if [[ "${run_all}" == "true" ]]; then
+            module_list_json="${all_modules_json}"
+          elif [[ "${#selected[@]}" -eq 0 ]]; then
+            module_list_json="[]"
+          else
+            module_list_json="$(printf '%s\n' "${!selected[@]}" | sort | jq -R . | jq -sc .)"
+          fi
+
+          if [[ "${module_list_json}" == "[]" ]]; then
+            has_modules=false
+          else
+            has_modules=true
+          fi
+
+          echo "has_modules=${has_modules}" >> "${GITHUB_OUTPUT}"
+          echo "module_matrix={\"module\":${module_list_json}}" >> "${GITHUB_OUTPUT}"
+          echo "module_list=${module_list_json}" >> "${GITHUB_OUTPUT}"
+          echo "Selected module harness targets: ${module_list_json}"
+
+  validate-modules:
+    name: Validate Module (${{ matrix.module }})
+    needs:
+      - terraform-gate
+      - check-required-secrets-variables
+      - validate-plan
+      - detect-module-targets
+    if: needs['terraform-gate'].outputs.enabled == 'true' && (needs.detect-module-targets.outputs.has_modules == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        module: ${{ fromJson(needs.detect-module-targets.outputs.module_matrix).module }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Create provider cache
+        run: mkdir -p "${TF_PLUGIN_CACHE_DIR}"
+
+      - name: Cache Terraform providers
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: terraform-providers-${{ runner.os }}-${{ env.TERRAFORM_VERSION }}-${{ hashFiles('**/*.tf') }}
+          restore-keys: |
+            terraform-providers-${{ runner.os }}-${{ env.TERRAFORM_VERSION }}-
+            terraform-providers-${{ runner.os }}-
+
+      - name: Terraform init without backend
+        working-directory: modules/${{ matrix.module }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            if terraform init -backend=false -input=false -no-color; then
+              exit 0
+            fi
+
+            if [ "$attempt" -eq 5 ]; then
+              echo "terraform init failed after ${attempt} attempts" >&2
+              exit 1
+            fi
+
+            rm -rf .terraform/providers
+            sleep_seconds=$((attempt * 10))
+            echo "terraform init failed; retrying in ${sleep_seconds}s (attempt $((attempt + 1))/5)"
+            sleep "${sleep_seconds}"
+          done
+
+      - name: Terraform validate
+        working-directory: modules/${{ matrix.module }}
+        run: terraform validate -no-color
+
+      - name: Terraform test
+        working-directory: modules/${{ matrix.module }}
+        run: terraform test -no-color
+
+  validate-plan:
+    if: needs['terraform-gate'].outputs.enabled == 'true'
+    name: Validate and Plan
+    needs:
+      - terraform-gate
+      - check-required-secrets-variables
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AWS_ACCESS_KEY_ID: ci-placeholder
+      AWS_SECRET_ACCESS_KEY: ci-placeholder
+      AWS_EC2_METADATA_DISABLED: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Create provider cache
+        run: mkdir -p "${TF_PLUGIN_CACHE_DIR}"
+
+      - name: Cache Terraform providers
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: terraform-providers-${{ runner.os }}-${{ env.TERRAFORM_VERSION }}-${{ hashFiles('**/*.tf') }}
+          restore-keys: |
+            terraform-providers-${{ runner.os }}-${{ env.TERRAFORM_VERSION }}-
+            terraform-providers-${{ runner.os }}-
+
+      - name: Terraform init without backend
+        working-directory: examples/foundation
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            if terraform init -backend=false -input=false -no-color; then
+              exit 0
+            fi
+
+            if [ "$attempt" -eq 5 ]; then
+              echo "terraform init failed after ${attempt} attempts" >&2
+              exit 1
+            fi
+
+            rm -rf .terraform/providers
+            sleep_seconds=$((attempt * 10))
+            echo "terraform init failed; retrying in ${sleep_seconds}s (attempt $((attempt + 1))/5)"
+            sleep "${sleep_seconds}"
+          done
+
+      - name: Terraform validate
+        working-directory: examples/foundation
+        run: terraform validate -no-color
+
+      - name: Terraform plan without backend or AWS API access
+        working-directory: examples/foundation
+        run: >-
+          terraform plan
+          -input=false
+          -no-color
+          -lock=false
+          -refresh=false
+          -var='offline_plan=true'
+          -var='bucket_name=ccoecicheck-foundation-placeholder'
+
+  publish-stage-repo:
+    name: Publish Github Demo Repo
+    if: needs['terraform-gate'].outputs.enabled == 'true' && (always() && github.event_name != 'pull_request' && contains(fromJSON('["refs/heads/main","refs/heads/dev","refs/heads/sbx"]'), github.ref) && needs.check-required-secrets-variables.outputs.is_stage_repository != 'true' && needs.check-required-secrets-variables.outputs.has_stage_publish_inputs == 'true' && needs.static-validation.result == 'success' && needs.validate-plan.result == 'success' && (needs.validate-modules.result == 'success' || needs.validate-modules.result == 'skipped') && (needs.create-git-tag.result == 'success' || needs.create-git-tag.result == 'skipped'))
+    needs:
+      - terraform-gate
+      - check-required-secrets-variables
+      - static-validation
+      - validate-modules
+      - validate-plan
+      - create-git-tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: Publish clean snapshot to stage repository
+        env:
+          STAGE_REPOSITORY: ${{ vars.STAGE_REPOSITORY || 'andyxuan2010/aws-template' }}
+          STAGE_REPO_TOKEN: ${{ secrets.STAGE_REPO_TOKEN }}
+          SOURCE_BRANCH: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+          CURRENT_REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${STAGE_REPO_TOKEN}" ]]; then
+            echo "Missing required secret: STAGE_REPO_TOKEN" >&2
+            exit 1
+          fi
+
+          stage_repository="${STAGE_REPOSITORY#https://github.com/}"
+          stage_repository="${stage_repository%.git}"
+          stage_repository="${stage_repository#/}"
+          stage_repository="${stage_repository%/}"
+
+          if [[ -z "${stage_repository}" ]]; then
+            echo "Missing required repository variable: STAGE_REPOSITORY" >&2
+            exit 1
+          fi
+
+          if [[ "${CURRENT_REPOSITORY,,}" == "${stage_repository,,}" ]]; then
+            echo "STAGE_REPOSITORY must be different from the source repository." >&2
+            exit 1
+          fi
+
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "${workdir}"' EXIT
+
+          rsync -a \
+            --exclude='.git' \
+            "${GITHUB_WORKSPACE}/" "${workdir}/repo/"
+
+          cd "${workdir}/repo"
+
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${SOURCE_BRANCH}"
+          git add .
+          git commit -m "Stage snapshot from ${SOURCE_BRANCH}@${SOURCE_SHA}"
+
+          target_repo="github.com/${stage_repository}"
+          git remote add origin "https://x-access-token:${STAGE_REPO_TOKEN}@${target_repo}.git"
+          git push --force origin "${SOURCE_BRANCH}"
+
+          # a fix for the pages.yml trigger
+          GH_TOKEN="${STAGE_REPO_TOKEN}" gh api \
+            --method POST \
+            "repos/${stage_repository}/dispatches" \
+            --field event_type=stage-snapshot          
+
+  create-git-tag:
+    name: Create Git Tag
+    if: needs['terraform-gate'].outputs.enabled == 'true' && (always() && vars.ENABLE_GITHUB_RELEASE_TAG == 'true' && github.event_name != 'pull_request' && contains(fromJSON('["refs/heads/main","refs/heads/dev","refs/heads/sbx"]'), github.ref) && needs.check-required-secrets-variables.outputs.is_stage_repository != 'true' && needs.static-validation.result == 'success' && needs.validate-plan.result == 'success' && (needs.validate-modules.result == 'success' || needs.validate-modules.result == 'skipped'))
+    needs:
+      - terraform-gate
+      - check-required-secrets-variables
+      - static-validation
+      - validate-plan
+      - validate-modules
+    outputs:
+      release_tag: ${{ steps.semver.outputs.release_tag }}
+      release_notes: ${{ steps.semver.outputs.release_notes }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Create canonical GitHub release tag
+        id: semver
+        env:
+          SOURCE_BRANCH: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --force --tags origin
+
+          latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
+          if [[ -z "${latest_tag}" ]]; then
+            latest_tag="v1.0.0"
+          fi
+
+          version="${latest_tag#v}"
+          IFS='.' read -r major minor patch <<< "${version}"
+          release_tag="v${major}.${minor}.$((patch + 1))"
+          release_notes="$(git log -n 20 --format='- %s (%h)' "${latest_tag}..${SOURCE_SHA}" || true)"
+          if [[ -z "${release_notes}" ]]; then
+            release_notes="- ${SOURCE_SHA}"
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${release_tag}" >/dev/null 2>&1; then
+            echo "Tag ${release_tag} already exists on origin."
+          else
+            git tag -a "${release_tag}" "${SOURCE_SHA}" -m "Release ${release_tag} from ${SOURCE_BRANCH}@${SOURCE_SHA}"
+            git push origin "refs/tags/${release_tag}"
+          fi
+
+          {
+            echo "release_tag=${release_tag}"
+            echo "release_notes<<EOF"
+            echo "${release_notes}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+  apply:
+    name: Apply (placeholder)
+    if: ${{ false }}
+    needs:
+      - terraform-gate
+      - static-validation
+      - check-required-secrets-variables
+      - validate-plan
+      - validate-modules
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply placeholder
+        run: echo "AWS apply is reserved for a downstream deployment repository and is not enabled yet."
+
+  publish-ado-dev-repo:
+    name: Publish ADO Dev Repo (placeholder)
+    if: ${{ false }}
+    needs:
+      - terraform-gate
+      - check-required-secrets-variables
+      - static-validation
+      - validate-modules
+      - validate-plan
+      - create-git-tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: ADO publication placeholder
+        run: echo "AWS Azure DevOps publication is reserved for a downstream repository and is not enabled yet."
