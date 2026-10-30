@@ -1,0 +1,291 @@
+name: $(Build.Repository.Name)
+
+trigger:
+  batch: true
+  branches:
+    include:
+      - main
+      - dev
+      - sbx
+
+pr: none
+
+pool:
+  vmImage: ubuntu-24.04
+
+variables:
+  TERRAFORM_VERSION: '1.15.8'
+  TF_IN_AUTOMATION: 'true'
+  TF_INPUT: 'false'
+  TF_PLUGIN_CACHE_DIR: '$(Pipeline.Workspace)/.terraform.d/plugin-cache'
+
+stages:
+  - stage: Validate
+    displayName: Terraform Validation
+    jobs:
+      - job: terraform_validate
+        displayName: Format and Validate
+        timeoutInMinutes: 20
+        steps:
+          - checkout: self
+            clean: true
+            persistCredentials: false
+
+          - task: Bash@3
+            displayName: Install Terraform
+            inputs:
+              targetType: filePath
+              filePath: scripts/azure-pipelines/install-terraform.sh
+              arguments: $(TERRAFORM_VERSION)
+              workingDirectory: $(Build.SourcesDirectory)
+
+          - task: Cache@2
+            displayName: Cache Terraform providers
+            inputs:
+              key: 'terraform | "$(Agent.OS)" | "$(TERRAFORM_VERSION)" | **/*.tf'
+              restoreKeys: |
+                terraform | "$(Agent.OS)" | "$(TERRAFORM_VERSION)"
+                terraform | "$(Agent.OS)"
+              path: $(TF_PLUGIN_CACHE_DIR)
+
+          - task: Bash@3
+            displayName: Terraform format and foundation validation
+            inputs:
+              targetType: inline
+              workingDirectory: $(Build.SourcesDirectory)
+              script: |
+                set -euo pipefail
+                mkdir -p "${TF_PLUGIN_CACHE_DIR}"
+                terraform fmt -check -recursive
+                terraform -chdir=examples/foundation init -backend=false -input=false -no-color
+                terraform -chdir=examples/foundation validate -no-color
+            env:
+              TF_PLUGIN_CACHE_DIR: $(TF_PLUGIN_CACHE_DIR)
+
+  - stage: Plan
+    displayName: Offline Foundation Plan
+    dependsOn: Validate
+    condition: succeeded()
+    jobs:
+      - job: terraform_plan
+        displayName: Plan with Placeholder AWS Credentials
+        timeoutInMinutes: 20
+        steps:
+          - checkout: self
+            clean: true
+            persistCredentials: false
+
+          - task: Bash@3
+            displayName: Install Terraform
+            inputs:
+              targetType: filePath
+              filePath: scripts/azure-pipelines/install-terraform.sh
+              arguments: $(TERRAFORM_VERSION)
+              workingDirectory: $(Build.SourcesDirectory)
+
+          - task: Cache@2
+            displayName: Cache Terraform providers
+            inputs:
+              key: 'terraform | "$(Agent.OS)" | "$(TERRAFORM_VERSION)" | **/*.tf'
+              restoreKeys: |
+                terraform | "$(Agent.OS)" | "$(TERRAFORM_VERSION)"
+                terraform | "$(Agent.OS)"
+              path: $(TF_PLUGIN_CACHE_DIR)
+
+          - task: Bash@3
+            displayName: Terraform offline plan
+            inputs:
+              targetType: inline
+              workingDirectory: $(Build.SourcesDirectory)
+              script: |
+                set -euo pipefail
+                mkdir -p "${TF_PLUGIN_CACHE_DIR}"
+                terraform -chdir=examples/foundation init -backend=false -input=false -no-color
+                terraform -chdir=examples/foundation plan \
+                  -input=false \
+                  -no-color \
+                  -lock=false \
+                  -refresh=false \
+                  -var='offline_plan=true' \
+                  -var='bucket_name=ccoecicheck-foundation-placeholder'
+            env:
+              TF_PLUGIN_CACHE_DIR: $(TF_PLUGIN_CACHE_DIR)
+              AWS_ACCESS_KEY_ID: ci-placeholder
+              AWS_SECRET_ACCESS_KEY: ci-placeholder
+              AWS_DEFAULT_REGION: us-east-1
+              AWS_EC2_METADATA_DISABLED: 'true'
+
+  - stage: DetectModuleTargets
+    displayName: Detect Changed Modules
+    dependsOn: Validate
+    condition: succeeded()
+    jobs:
+      - job: detect_module_targets
+        displayName: Detect Changed Module Targets
+        timeoutInMinutes: 10
+        steps:
+          - checkout: self
+            clean: true
+            persistCredentials: false
+            fetchDepth: 0
+
+          - task: Bash@3
+            displayName: Select changed modules
+            name: set_module_targets
+            inputs:
+              targetType: inline
+              workingDirectory: $(Build.SourcesDirectory)
+              script: |
+                set -euo pipefail
+                changed_files_file="$(Agent.TempDirectory)/ado-build-changed-files.txt"
+
+                if ! python <<'PY' > "${changed_files_file}"; then
+                import json
+                import os
+                import sys
+                import urllib.parse
+                import urllib.request
+
+                token = os.environ.get("SYSTEM_ACCESSTOKEN", "")
+                if not token:
+                    print("SYSTEM_ACCESSTOKEN is unavailable", file=sys.stderr)
+                    sys.exit(1)
+
+                collection_uri = os.environ["SYSTEM_COLLECTIONURI"].rstrip("/")
+                project = urllib.parse.quote(os.environ["SYSTEM_TEAMPROJECT"], safe="")
+                repository_id = urllib.parse.quote(os.environ["BUILD_REPOSITORY_ID"], safe="")
+                build_id = os.environ["BUILD_BUILDID"]
+
+                def get_json(url):
+                    request = urllib.request.Request(
+                        url,
+                        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                    )
+                    with urllib.request.urlopen(request, timeout=30) as response:
+                        return json.load(response), response.headers.get("x-ms-continuationtoken", "")
+
+                commit_ids = []
+                continuation = ""
+                while True:
+                    url = (
+                        f"{collection_uri}/{project}/_apis/build/builds/{build_id}/changes"
+                        "?api-version=7.1&includeSourceChange=true&$top=100"
+                    )
+                    if continuation:
+                        url += f"&continuationToken={urllib.parse.quote(continuation, safe='')}"
+                    payload, continuation = get_json(url)
+                    commit_ids.extend(
+                        change["id"] for change in payload.get("value", []) if change.get("id")
+                    )
+                    if not continuation:
+                        break
+
+                changed_paths = set()
+                for commit_id in commit_ids:
+                    continuation = ""
+                    while True:
+                        url = (
+                            f"{collection_uri}/{project}/_apis/git/repositories/{repository_id}"
+                            f"/commits/{urllib.parse.quote(commit_id, safe='')}/changes?api-version=7.1&top=100"
+                        )
+                        if continuation:
+                            url += f"&skip={urllib.parse.quote(continuation, safe='')}"
+                        payload, continuation = get_json(url)
+                        for change in payload.get("changes", []):
+                            path = (change.get("item") or {}).get("path", "").lstrip("/")
+                            if path:
+                                changed_paths.add(path)
+                        if not continuation:
+                            break
+
+                for path in sorted(changed_paths):
+                    print(path)
+                PY
+                  echo "Azure DevOps change lookup failed; using the source commit diff."
+                  : > "${changed_files_file}"
+                fi
+
+                if [[ ! -s "${changed_files_file}" ]]; then
+                  head_ref="${BUILD_SOURCEVERSION}"
+                  if git rev-parse --verify "${head_ref}^" >/dev/null 2>&1; then
+                    base_ref="${head_ref}^"
+                  else
+                    base_ref="$(git hash-object -w -t tree /dev/null)"
+                  fi
+                  git diff --name-only "${base_ref}" "${head_ref}" > "${changed_files_file}"
+                fi
+
+                echo "Changed files reported for this build:"
+                cat "${changed_files_file}"
+                module_matrix="$(bash scripts/azure-pipelines/module-targets.sh detect-files --input "${changed_files_file}" --format ado-matrix)"
+                module_list_json="$(bash scripts/azure-pipelines/module-targets.sh detect-files --input "${changed_files_file}" --format json-array)"
+
+                if [[ "${module_list_json}" == "[]" ]]; then
+                  has_modules="false"
+                else
+                  has_modules="true"
+                fi
+
+                echo "Selected module targets: ${module_list_json}"
+                echo "##vso[task.setvariable variable=moduleMatrix;isOutput=true;isReadOnly=true]${module_matrix}"
+                echo "##vso[task.setvariable variable=moduleList;isOutput=true;isReadOnly=true]${module_list_json}"
+                echo "##vso[task.setvariable variable=hasModules;isOutput=true;isReadOnly=true]${has_modules}"
+            target:
+              commands: restricted
+              settableVariables:
+                - moduleMatrix
+                - moduleList
+                - hasModules
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+              BUILD_SOURCEVERSION: $(Build.SourceVersion)
+
+  - stage: ValidateModules
+    displayName: Validate and Test Changed Modules
+    dependsOn:
+      - Plan
+      - DetectModuleTargets
+    condition: and(succeeded(), eq(dependencies.DetectModuleTargets.outputs['detect_module_targets.set_module_targets.hasModules'], 'true'))
+    jobs:
+      - job: terraform_module_tests
+        displayName: Terraform Module $(moduleName)
+        timeoutInMinutes: 30
+        strategy:
+          maxParallel: 4
+          matrix: $[ stageDependencies.DetectModuleTargets.detect_module_targets.outputs['set_module_targets.moduleMatrix'] ]
+        steps:
+          - checkout: self
+            clean: true
+            persistCredentials: false
+
+          - task: Bash@3
+            displayName: Install Terraform
+            inputs:
+              targetType: filePath
+              filePath: scripts/azure-pipelines/install-terraform.sh
+              arguments: $(TERRAFORM_VERSION)
+              workingDirectory: $(Build.SourcesDirectory)
+
+          - task: Cache@2
+            displayName: Cache Terraform providers
+            inputs:
+              key: 'terraform | "$(Agent.OS)" | "$(TERRAFORM_VERSION)" | **/*.tf'
+              restoreKeys: |
+                terraform | "$(Agent.OS)" | "$(TERRAFORM_VERSION)"
+                terraform | "$(Agent.OS)"
+              path: $(TF_PLUGIN_CACHE_DIR)
+
+          - task: Bash@3
+            displayName: Validate and test $(moduleName)
+            inputs:
+              targetType: inline
+              workingDirectory: $(Build.SourcesDirectory)
+              script: |
+                set -euo pipefail
+                mkdir -p "${TF_PLUGIN_CACHE_DIR}"
+                module_dir="modules/$(moduleName)"
+                terraform -chdir="${module_dir}" init -backend=false -input=false -no-color
+                terraform -chdir="${module_dir}" validate -no-color
+                terraform -chdir="${module_dir}" test -no-color
+            env:
+              TF_PLUGIN_CACHE_DIR: $(TF_PLUGIN_CACHE_DIR)

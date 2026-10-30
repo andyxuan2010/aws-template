@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1120" role="img" aria-labelledby="title desc">
+  <title id="title">AWS Terraform module map</title>
+  <desc id="desc">Thirty-seven reusable Terraform modules grouped into five capability areas.</desc>
+  <defs>
+    <style>
+      text { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+      a { cursor: pointer; }
+      a:hover .chip, a:focus .chip { fill: #e5efff; stroke: #2563eb; stroke-width: 2; }
+      .title { fill: #10233f; font-size: 38px; font-weight: 750; }
+      .subtitle { fill: #53657c; font-size: 18px; }
+      .card-title { fill: #10233f; font-size: 21px; font-weight: 700; }
+      .count { font-size: 15px; font-weight: 700; }
+      .chip { fill: #f4f7fb; stroke: #dce5ef; stroke-width: 1; }
+      .label { fill: #26384e; font-size: 15px; font-weight: 550; }
+    </style>
+  </defs>
+  <rect width="1440" height="1120" rx="28" fill="#f8fafc"/>
+  <text class="title" x="64" y="76">AWS Terraform Module Map</text>
+  <text class="subtitle" x="64" y="109">37 reusable modules · organized by capability</text>
+
+  <!-- Foundation & security -->
+  <g transform="translate(48 145)">
+    <rect width="650" height="300" rx="20" fill="#fff" stroke="#dbe4ef" stroke-width="2"/>
+    <rect width="8" height="300" rx="4" fill="#2563eb"/>
+    <text class="card-title" x="30" y="44">Foundation &amp; security</text>
+    <rect x="550" y="20" width="70" height="30" rx="15" fill="#dbeafe"/><text class="count" x="585" y="40" text-anchor="middle" fill="#1d4ed8">7 modules</text>
+    <g transform="translate(26 74)">
+      <a href="../../modules/aws_backup/README.md" target="_top" aria-label="Open AWS Backup module documentation"><rect class="chip" width="184" height="48" rx="12"/><text class="label" x="92" y="30" text-anchor="middle">AWS Backup</text></a>
+      <a href="../../modules/aws_config/README.md" target="_top" aria-label="Open AWS Config module documentation"><rect class="chip" x="198" width="184" height="48" rx="12"/><text class="label" x="290" y="30" text-anchor="middle">AWS Config</text></a>
+      <a href="../../modules/cloudtrail/README.md" target="_top" aria-label="Open CloudTrail module documentation"><rect class="chip" x="396" width="202" height="48" rx="12"/><text class="label" x="497" y="30" text-anchor="middle">CloudTrail</text></a>
+      <a href="../../modules/guardduty/README.md" target="_top" aria-label="Open GuardDuty module documentation"><rect class="chip" y="62" width="184" height="48" rx="12"/><text class="label" x="92" y="92" text-anchor="middle">GuardDuty</text></a>
+      <a href="../../modules/iam_role/README.md" target="_top" aria-label="Open IAM role module documentation"><rect class="chip" x="198" y="62" width="184" height="48" rx="12"/><text class="label" x="290" y="92" text-anchor="middle">IAM role</text></a>
+      <a href="../../modules/kms_key/README.md" target="_top" aria-label="Open KMS key module documentation"><rect class="chip" x="396" y="62" width="202" height="48" rx="12"/><text class="label" x="497" y="92" text-anchor="middle">KMS key</text></a>
+      <a href="../../modules/security_hub_cspm/README.md" target="_top" aria-label="Open Security Hub CSPM module documentation"><rect class="chip" y="124" width="250" height="48" rx="12"/><text class="label" x="125" y="154" text-anchor="middle">Security Hub CSPM</text></a>
+    </g>
+  </g>
+
+  <!-- Network & edge -->
+  <g transform="translate(742 145)">
+    <rect width="650" height="300" rx="20" fill="#fff" stroke="#dbe4ef" stroke-width="2"/>
+    <rect width="8" height="300" rx="4" fill="#0891b2"/>
+    <text class="card-title" x="30" y="44">Network &amp; edge</text>
+    <rect x="550" y="20" width="70" height="30" rx="15" fill="#cffafe"/><text class="count" x="585" y="40" text-anchor="middle" fill="#0e7490">12 modules</text>
+    <g transform="translate(24 74)">
+      <a href="../../modules/acm_certificate/README.md" target="_top" aria-label="Open ACM certificate module documentation"><rect class="chip" width="188" height="48" rx="12"/><text class="label" x="94" y="30" text-anchor="middle">ACM certificate</text></a>
+      <a href="../../modules/application_load_balancer/README.md" target="_top" aria-label="Open Application LB module documentation"><rect class="chip" x="198" width="188" height="48" rx="12"/><text class="label" x="292" y="30" text-anchor="middle">Application LB</text></a>
+      <a href="../../modules/cloudfront/README.md" target="_top" aria-label="Open CloudFront module documentation"><rect class="chip" x="396" width="206" height="48" rx="12"/><text class="label" x="499" y="30" text-anchor="middle">CloudFront</text></a>
+      <a href="../../modules/fortigate/README.md" target="_top" aria-label="Open FortiGate module documentation"><rect class="chip" y="62" width="188" height="48" rx="12"/><text class="label" x="94" y="92" text-anchor="middle">FortiGate</text></a>
+      <a href="../../modules/gateway_load_balancer/README.md" target="_top" aria-label="Open Gateway LB module documentation"><rect class="chip" x="198" y="62" width="188" height="48" rx="12"/><text class="label" x="292" y="92" text-anchor="middle">Gateway LB</text></a>
+      <a href="../../modules/route_manager/README.md" target="_top" aria-label="Open Route Manager module documentation"><rect class="chip" x="396" y="62" width="206" height="48" rx="12"/><text class="label" x="499" y="92" text-anchor="middle">Route Manager</text></a>
+      <a href="../../modules/route53/README.md" target="_top" aria-label="Open Route 53 module documentation"><rect class="chip" y="124" width="188" height="48" rx="12"/><text class="label" x="94" y="154" text-anchor="middle">Route 53</text></a>
+      <a href="../../modules/security_group/README.md" target="_top" aria-label="Open Security group module documentation"><rect class="chip" x="198" y="124" width="188" height="48" rx="12"/><text class="label" x="292" y="154" text-anchor="middle">Security group</text></a>
+      <a href="../../modules/transit_gateway/README.md" target="_top" aria-label="Open Transit Gateway module documentation"><rect class="chip" x="396" y="124" width="206" height="48" rx="12"/><text class="label" x="499" y="154" text-anchor="middle">Transit Gateway</text></a>
+      <a href="../../modules/vpc/README.md" target="_top" aria-label="Open VPC module documentation"><rect class="chip" y="186" width="188" height="48" rx="12"/><text class="label" x="94" y="216" text-anchor="middle">VPC</text></a>
+      <a href="../../modules/vpc_endpoints/README.md" target="_top" aria-label="Open VPC endpoints module documentation"><rect class="chip" x="198" y="186" width="188" height="48" rx="12"/><text class="label" x="292" y="216" text-anchor="middle">VPC endpoints</text></a>
+      <a href="../../modules/waf_web_acl/README.md" target="_top" aria-label="Open WAF Web ACL module documentation"><rect class="chip" x="396" y="186" width="206" height="48" rx="12"/><text class="label" x="499" y="216" text-anchor="middle">WAF Web ACL</text></a>
+    </g>
+  </g>
+
+  <!-- Compute & applications -->
+  <g transform="translate(48 475)">
+    <rect width="650" height="300" rx="20" fill="#fff" stroke="#dbe4ef" stroke-width="2"/>
+    <rect width="8" height="300" rx="4" fill="#7c3aed"/>
+    <text class="card-title" x="30" y="44">Compute &amp; applications</text>
+    <rect x="550" y="20" width="70" height="30" rx="15" fill="#ede9fe"/><text class="count" x="585" y="40" text-anchor="middle" fill="#6d28d9">7 modules</text>
+    <g transform="translate(26 74)">
+      <a href="../../modules/api_gateway/README.md" target="_top" aria-label="Open API Gateway module documentation"><rect class="chip" width="184" height="48" rx="12"/><text class="label" x="92" y="30" text-anchor="middle">API Gateway</text></a>
+      <a href="../../modules/autoscaling/README.md" target="_top" aria-label="Open Auto Scaling module documentation"><rect class="chip" x="198" width="184" height="48" rx="12"/><text class="label" x="290" y="30" text-anchor="middle">Auto Scaling</text></a>
+      <a href="../../modules/ec2_instance/README.md" target="_top" aria-label="Open EC2 instance module documentation"><rect class="chip" x="396" width="202" height="48" rx="12"/><text class="label" x="497" y="30" text-anchor="middle">EC2 instance</text></a>
+      <a href="../../modules/ecs_service/README.md" target="_top" aria-label="Open ECS service module documentation"><rect class="chip" y="62" width="184" height="48" rx="12"/><text class="label" x="92" y="92" text-anchor="middle">ECS service</text></a>
+      <a href="../../modules/eks/README.md" target="_top" aria-label="Open EKS module documentation"><rect class="chip" x="198" y="62" width="184" height="48" rx="12"/><text class="label" x="290" y="92" text-anchor="middle">EKS</text></a>
+      <a href="../../modules/lambda_function/README.md" target="_top" aria-label="Open Lambda function module documentation"><rect class="chip" x="396" y="62" width="202" height="48" rx="12"/><text class="label" x="497" y="92" text-anchor="middle">Lambda function</text></a>
+      <a href="../../modules/step_functions/README.md" target="_top" aria-label="Open Step Functions module documentation"><rect class="chip" y="124" width="250" height="48" rx="12"/><text class="label" x="125" y="154" text-anchor="middle">Step Functions</text></a>
+    </g>
+  </g>
+
+  <!-- Data & messaging -->
+  <g transform="translate(742 475)">
+    <rect width="650" height="300" rx="20" fill="#fff" stroke="#dbe4ef" stroke-width="2"/>
+    <rect width="8" height="300" rx="4" fill="#059669"/>
+    <text class="card-title" x="30" y="44">Data &amp; messaging</text>
+    <rect x="550" y="20" width="70" height="30" rx="15" fill="#d1fae5"/><text class="count" x="585" y="40" text-anchor="middle" fill="#047857">10 modules</text>
+    <g transform="translate(24 74)">
+      <a href="../../modules/dynamodb_table/README.md" target="_top" aria-label="Open DynamoDB table module documentation"><rect class="chip" width="188" height="48" rx="12"/><text class="label" x="94" y="30" text-anchor="middle">DynamoDB table</text></a>
+      <a href="../../modules/ecr_repository/README.md" target="_top" aria-label="Open ECR repository module documentation"><rect class="chip" x="198" width="188" height="48" rx="12"/><text class="label" x="292" y="30" text-anchor="middle">ECR repository</text></a>
+      <a href="../../modules/efs/README.md" target="_top" aria-label="Open EFS module documentation"><rect class="chip" x="396" width="206" height="48" rx="12"/><text class="label" x="499" y="30" text-anchor="middle">EFS</text></a>
+      <a href="../../modules/elasticache/README.md" target="_top" aria-label="Open ElastiCache module documentation"><rect class="chip" y="62" width="188" height="48" rx="12"/><text class="label" x="94" y="92" text-anchor="middle">ElastiCache</text></a>
+      <a href="../../modules/eventbridge/README.md" target="_top" aria-label="Open EventBridge module documentation"><rect class="chip" x="198" y="62" width="188" height="48" rx="12"/><text class="label" x="292" y="92" text-anchor="middle">EventBridge</text></a>
+      <a href="../../modules/rds/README.md" target="_top" aria-label="Open RDS module documentation"><rect class="chip" x="396" y="62" width="206" height="48" rx="12"/><text class="label" x="499" y="92" text-anchor="middle">RDS</text></a>
+      <a href="../../modules/s3_bucket/README.md" target="_top" aria-label="Open S3 bucket module documentation"><rect class="chip" y="124" width="188" height="48" rx="12"/><text class="label" x="94" y="154" text-anchor="middle">S3 bucket</text></a>
+      <a href="../../modules/secrets_manager/README.md" target="_top" aria-label="Open Secrets Manager module documentation"><rect class="chip" x="198" y="124" width="188" height="48" rx="12"/><text class="label" x="292" y="154" text-anchor="middle">Secrets Manager</text></a>
+      <a href="../../modules/sns_topic/README.md" target="_top" aria-label="Open SNS topic module documentation"><rect class="chip" x="396" y="124" width="206" height="48" rx="12"/><text class="label" x="499" y="154" text-anchor="middle">SNS topic</text></a>
+      <a href="../../modules/sqs_queue/README.md" target="_top" aria-label="Open SQS queue module documentation"><rect class="chip" y="186" width="188" height="48" rx="12"/><text class="label" x="94" y="216" text-anchor="middle">SQS queue</text></a>
+    </g>
+  </g>
+
+  <!-- Operations & monitoring -->
+  <g transform="translate(48 805)">
+    <rect width="1344" height="220" rx="20" fill="#fff" stroke="#dbe4ef" stroke-width="2"/>
+    <rect width="8" height="220" rx="4" fill="#d97706"/>
+    <text class="card-title" x="30" y="48">Operations &amp; monitoring</text>
+    <rect x="1240" y="20" width="70" height="30" rx="15" fill="#fef3c7"/><text class="count" x="1275" y="40" text-anchor="middle" fill="#b45309">1 module</text>
+    <a href="../../modules/cloudwatch_monitoring/README.md" target="_top" aria-label="Open CloudWatch monitoring module documentation"><rect class="chip" x="30" y="82" width="350" height="56" rx="12"/>
+    <text class="label" x="205" y="117" text-anchor="middle">CloudWatch monitoring</text></a>
+    <text class="subtitle" x="30" y="183">Logs · alarms · dashboards</text>
+  </g>
+  <text x="1390" y="1080" text-anchor="end" fill="#7b8ba0" font-size="13">CCOE AWS Terraform Template</text>
+</svg>
