@@ -1,0 +1,31 @@
+name: Terraform init without backend
+description: Initialize a Terraform root module without a backend, retrying transient provider download failures.
+
+inputs:
+  working-directory:
+    description: Terraform root module directory, relative to the repository root.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Terraform init with retries
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        for attempt in 1 2 3 4 5; do
+          if terraform init -backend=false -input=false -no-color; then
+            exit 0
+          fi
+
+          if [ "$attempt" -eq 5 ]; then
+            echo "terraform init failed after ${attempt} attempts" >&2
+            exit 1
+          fi
+
+          rm -rf .terraform/providers
+          sleep_seconds=$((attempt * 10))
+          echo "terraform init failed; retrying in ${sleep_seconds}s (attempt $((attempt + 1))/5)"
+          sleep "${sleep_seconds}"
+        done
